@@ -1,0 +1,135 @@
+# Audio Transcriber Configuration File
+
+# Default transcription engine: whisper, google, vosk
+default_engine: whisper
+
+# Whisper configuration
+whisper:
+  # Model size: tiny, base, small, medium, large, large-v2, large-v3
+  model: base
+  # Device: auto, cpu, cuda
+  device: auto
+  # Language: auto for auto-detection, or specify (en, es, fr, de, etc.)
+  language: auto
+  # Task: transcribe or translate (translate converts to English)
+  task: transcribe
+  # Enable FP16 for GPU acceleration (requires CUDA)
+  fp16: true
+  # Number of threads for CPU inference
+  threads: 0  # 0 = auto
+  # Beam size for decoding (higher = more accurate but slower)
+  beam_size: 5
+  # Best of candidates (higher = more accurate but slower)
+  best_of: 5
+  # Temperature for sampling
+  temperature: 0.0
+  # Enable verbose output
+  verbose: false
+
+# Google Speech Recognition configuration
+google:
+  # Language code (e.g., en-US, es-ES, fr-FR)
+  language: en-US
+  # Show all alternatives
+  show_all: false
+  # API key (optional, uses free tier if not provided)
+  api_key: null
+  # Phrase hints to improve accuracy
+  phrase_hints: []
+
+# Vosk configuration
+vosk:
+  # Path to Vosk model directory
+  model_path: models/vosk-model-en-us-0.22
+  # Language code
+  language: en-US
+  # Sample rate (should match audio after preprocessing)
+  sample_rate: 16000
+  # Show word-level timestamps
+  show_words: true
+
+# Audio processing settings
+audio:
+  # Target sample rate for transcription (Hz)
+  sample_rate: 16000
+  # Convert to mono
+  mono: true
+  # Audio format conversion
+  formats:
+    # Supported input formats
+    input_formats:
+      - mp3
+      - wav
+      - m4a
+      - flac
+      - ogg
+      - wma
+      - aac
+      - opus
+      - webm
+      - mp4
+    # Default output audio format for preprocessing
+    output_format: wav
+  # Audio normalization
+  normalize: true
+  # Remove silence (experimental)
+  remove_silence: false
+  # Silence threshold (dB)
+  silence_threshold: -40
+
+# Output settings
+output:
+  # Default output format: txt, json, srt, vtt, all
+  format: txt
+  # Include timestamps in output
+  timestamps: false
+  # Include word-level timestamps (if supported by engine)
+  word_timestamps: false
+  # Include confidence scores (if supported by engine)
+  confidence: false
+  # Output directory (null = same as input)
+  directory: null
+  # Append engine name to output filename
+  append_engine_name: false
+
+# Subtitle settings (for SRT and VTT)
+subtitles:
+  # Maximum characters per subtitle line
+  max_chars_per_line: 42
+  # Maximum lines per subtitle
+  max_lines: 2
+  # Maximum subtitle duration (seconds)
+  max_duration: 7.0
+  # Minimum subtitle duration (seconds)
+  min_duration: 0.5
+
+# Batch processing settings
+batch:
+  # Process files in parallel
+  parallel: false
+  # Number of parallel workers (0 = auto)
+  workers: 0
+  # Continue on error
+  continue_on_error: true
+  # Recursive directory search
+  recursive: false
+
+# Performance settings
+performance:
+  # Enable GPU if available
+  use_gpu: true
+  # Chunk size for long audio files (seconds, 0 = no chunking)
+  chunk_size: 0
+  # Cache transcription models
+  cache_models: true
+
+# Logging settings
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: INFO
+  # Log to file
+  log_file: null
+  # Colored output
+  colored: true
+  # Show progress bars
+  progress_bars: true

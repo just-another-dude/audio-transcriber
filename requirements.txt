@@ -1,0 +1,29 @@
+# Core dependencies
+openai-whisper>=20231117
+SpeechRecognition>=3.10.0
+pydub>=0.25.1
+librosa>=0.10.0
+soundfile>=0.12.1
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Vosk for offline transcription
+vosk>=0.3.45
+
+# Web interface
+gradio>=4.0.0
+
+# Configuration
+PyYAML>=6.0
+
+# Progress bars
+tqdm>=4.65.0
+
+# Audio format support
+ffmpeg-python>=0.2.0
+
+# Type hints support
+typing-extensions>=4.5.0
+
+# Logging enhancements
+coloredlogs>=15.0.1

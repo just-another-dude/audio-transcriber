@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  # CPU-only service
+  audio-transcriber:
+    build:
+      context: .
+      target: app
+    container_name: audio-transcriber
+    ports:
+      - "7860:7860"
+    volumes:
+      # Mount input/output directories
+      - ./input:/app/input
+      - ./output:/app/output
+      # Mount models directory for persistence
+      - ./models:/app/models
+      # Optional: mount custom config
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # GPU-enabled service (requires nvidia-docker)
+  audio-transcriber-gpu:
+    build:
+      context: .
+      target: gpu
+    container_name: audio-transcriber-gpu
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./models:/app/models
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    profiles:
+      - gpu
+
+  # CLI service for batch processing
+  audio-transcriber-cli:
+    build:
+      context: .
+      target: app
+    container_name: audio-transcriber-cli
+    volumes:
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./models:/app/models
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python transcribe.py /app/input/*.m4a --output-dir /app/output
+    profiles:
+      - cli
+
+volumes:
+  models:
+    driver: local
+
+networks:
+  default:
+    name: audio-transcriber-network
