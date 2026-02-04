@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """
-Simple, intuitive web UI for audio transcription using OpenAI's Whisper API.
+Unified web UI for audio transcription.
+
+Supports the OpenAI Whisper API (cloud) and, when their dependencies are
+installed, local engines from transcribe.py (Whisper local, Google Speech
+Recognition, Vosk).
 """
 
+import json
 import os
 import subprocess
 import tempfile
@@ -10,6 +15,7 @@ import logging
 import zipfile
 from pathlib import Path
 from typing import List, Optional, Tuple
+
 from dotenv import load_dotenv
 import gradio as gr
 from openai import OpenAI
@@ -22,16 +28,122 @@ logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(),  # Console output
-        logging.FileHandler('/tmp/transcriber.log')  # Persistent log file
-    ]
+        logging.StreamHandler(),
+        logging.FileHandler('/tmp/transcriber.log'),
+    ],
 )
 logger = logging.getLogger(__name__)
 
-# Constants
-MAX_FILE_SIZE_MB = 24  # OpenAI limit is 25MB, use 24 to be safe
-SUPPORTED_FORMATS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm', '.mp4', '.mpeg', '.mpga', '.oga', '.opus']
+# ---------------------------------------------------------------------------
+# Conditional imports for local engines (transcribe.py)
+# ---------------------------------------------------------------------------
+LOCAL_ENGINES_AVAILABLE = False
+WHISPER_LOCAL_AVAILABLE = False
+GOOGLE_SR_AVAILABLE = False
+VOSK_AVAILABLE = False
+try:
+    from transcribe import (
+        Transcriber,
+        TranscriptionResult,
+        WHISPER_AVAILABLE as WHISPER_LOCAL_AVAILABLE,
+        GOOGLE_SR_AVAILABLE,
+        VOSK_AVAILABLE,
+    )
+    LOCAL_ENGINES_AVAILABLE = True
+except ImportError:
+    pass
 
+# ---------------------------------------------------------------------------
+# Constants (OpenAI path)
+# ---------------------------------------------------------------------------
+MAX_FILE_SIZE_MB = 24  # OpenAI limit is 25MB, use 24 to be safe
+SUPPORTED_FORMATS = [
+    '.mp3', '.wav', '.m4a', '.flac', '.ogg', '.webm',
+    '.mp4', '.mpeg', '.mpga', '.oga', '.opus',
+]
+
+
+# ---------------------------------------------------------------------------
+# Local-engine wrapper
+# ---------------------------------------------------------------------------
+_local_transcriber: Optional['LocalTranscriberWrapper'] = None
+
+
+def _get_local_transcriber() -> 'LocalTranscriberWrapper':
+    """Return a lazily-initialised singleton wrapper around transcribe.py."""
+    global _local_transcriber
+    if _local_transcriber is None:
+        _local_transcriber = LocalTranscriberWrapper()
+    return _local_transcriber
+
+
+class LocalTranscriberWrapper:
+    """Thin adapter around transcribe.py's Transcriber for the web UI."""
+
+    def __init__(self):
+        self.transcriber = Transcriber()
+        logger.info("Local Transcriber initialised")
+
+    def _apply_engine_config(self, engine: str, model: str, task: str):
+        """Update transcriber config for the selected engine."""
+        if engine == "whisper":
+            self.transcriber.config['whisper']['model'] = model
+            self.transcriber.config['whisper']['task'] = task
+
+            # Clear cached model if model changed
+            if 'whisper' in self.transcriber.engines:
+                current_model = self.transcriber.engines['whisper'].model_name
+                if current_model != model:
+                    logger.info(
+                        f"Model changed from {current_model} to {model}, "
+                        "clearing cache"
+                    )
+                    self.transcriber.engines.pop('whisper')
+
+    @staticmethod
+    def _format_result(result: 'TranscriptionResult', output_format: str) -> str:
+        """Format a TranscriptionResult according to the chosen output format."""
+        if output_format == "verbose_json":
+            return result.to_json()
+        if output_format == "srt":
+            return result.to_srt()
+        if output_format == "vtt":
+            return result.to_vtt()
+        return result.text
+
+    def transcribe_single(
+        self,
+        audio_path: Path,
+        engine: str,
+        output_format: str,
+        language: str,
+        model: str,
+        task: str,
+    ) -> Tuple[str, dict]:
+        """Transcribe a single file via a local engine.
+
+        Returns (formatted_text, metadata_dict).
+        """
+        self._apply_engine_config(engine, model, task)
+        lang_arg = language if language != "auto" else None
+
+        result = self.transcriber.transcribe_file(
+            audio_path, engine=engine, language=lang_arg,
+        )
+        text = self._format_result(result, output_format)
+        metadata = {
+            "engine": result.engine,
+            "model": result.model,
+            "language": result.language,
+            "processing_time": result.duration,
+            "segments": len(result.segments) if result.segments else 0,
+        }
+        return text, metadata
+
+
+# ---------------------------------------------------------------------------
+# Shared utility helpers (OpenAI path)
+# ---------------------------------------------------------------------------
 
 def get_file_size_mb(file_path: str) -> float:
     """Get file size in MB."""
@@ -92,7 +204,6 @@ def compress_audio(input_path: str, target_size_mb: float = 20) -> str:
 
         logger.info(f"  Retry bitrate: {retry_bitrate}kbps")
 
-        # Build new command with retry bitrate
         cmd = [
             'ffmpeg', '-i', str(input_path),
             '-vn',
@@ -144,13 +255,17 @@ def format_duration(seconds: float) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+# ---------------------------------------------------------------------------
+# OpenAI API single-file transcription (unchanged)
+# ---------------------------------------------------------------------------
+
 def _transcribe_single(
     audio_path: Path,
     output_format: str,
     language: str,
     client: OpenAI,
 ) -> Tuple[str, float]:
-    """Transcribe a single audio file. Returns (transcription_text, duration)."""
+    """Transcribe a single audio file via OpenAI API. Returns (text, duration)."""
     file_size_mb = get_file_size_mb(str(audio_path))
     duration = get_audio_duration(str(audio_path))
 
@@ -204,7 +319,6 @@ def _transcribe_single(
 
     # Handle response
     if api_format == "verbose_json":
-        import json
         text = json.dumps(response.model_dump(), indent=2, ensure_ascii=False)
     else:
         text = response if isinstance(response, str) else response.text
@@ -212,44 +326,77 @@ def _transcribe_single(
     return text, duration
 
 
+# ---------------------------------------------------------------------------
+# Unified transcription dispatch
+# ---------------------------------------------------------------------------
+
 def transcribe(
     audio_files,
-    output_format: str = "text",
+    engine: str = "openai",
+    output_format: str = "txt",
     language: str = "auto",
-    progress=gr.Progress()
+    model: str = "base",
+    task: str = "transcribe",
+    progress=gr.Progress(),
 ) -> tuple:
     """
-    Transcribe one or more audio files using OpenAI Whisper API.
+    Transcribe one or more audio files.
 
+    Routes to the OpenAI API or a local engine depending on *engine*.
     Returns: (status, transcription, output_file, info)
     """
     if not audio_files:
         return "Please upload at least one audio file", "", None, ""
 
-    # Check API key
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return "OpenAI API key not found. Set OPENAI_API_KEY in .env file", "", None, ""
+    # Normalise to list of Path objects
+    paths: List[Path] = []
+    for f in audio_files:
+        paths.append(Path(f.name if hasattr(f, 'name') else f))
+
+    logger.info(f"=== New transcription request ({len(paths)} file(s)) ===")
+    logger.info(f"Engine: {engine}, Format: {output_format}, Language: {language}")
 
     try:
-        client = OpenAI(api_key=api_key)
+        # -------------------------------------------------------------------
+        # Helper closures for single-file transcription per engine
+        # -------------------------------------------------------------------
+        def _do_openai(audio_path: Path) -> Tuple[str, dict]:
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise RuntimeError(
+                    "OpenAI API key not found. Set OPENAI_API_KEY in .env file"
+                )
+            client = OpenAI(api_key=api_key)
+            text, duration = _transcribe_single(
+                audio_path, output_format, language, client,
+            )
+            file_size_mb = get_file_size_mb(str(audio_path))
+            cost = (duration / 60) * 0.006
+            meta = {
+                "duration": duration,
+                "size_mb": file_size_mb,
+                "cost": cost,
+            }
+            return text, meta
 
-        # Normalise to list of Path objects
-        paths = []
-        for f in audio_files:
-            paths.append(Path(f.name if hasattr(f, 'name') else f))
+        def _do_local(audio_path: Path) -> Tuple[str, dict]:
+            wrapper = _get_local_transcriber()
+            text, meta = wrapper.transcribe_single(
+                audio_path, engine, output_format, language, model, task,
+            )
+            return text, meta
 
-        logger.info(f"=== New transcription request ({len(paths)} file(s)) ===")
-        logger.info(f"Format: {output_format}, Language: {language}")
+        is_openai = engine == "openai"
+        do_one = _do_openai if is_openai else _do_local
 
-        # --- Single file (original behaviour) ---
+        # -------------------------------------------------------------------
+        # Single file
+        # -------------------------------------------------------------------
         if len(paths) == 1:
             audio_path = paths[0]
             progress(0.1, desc="Checking file...")
 
-            text, duration = _transcribe_single(
-                audio_path, output_format, language, client
-            )
+            text, meta = do_one(audio_path)
 
             progress(0.9, desc="Processing results...")
 
@@ -257,46 +404,58 @@ def transcribe(
             output_file = tempfile.NamedTemporaryFile(
                 suffix=f".{output_suffix}",
                 prefix=f"{audio_path.stem}_",
-                delete=False, mode='w', encoding='utf-8'
+                delete=False, mode='w', encoding='utf-8',
             )
             output_file.write(text)
             output_file.close()
 
-            file_size_mb = get_file_size_mb(str(audio_path))
-            cost = (duration / 60) * 0.006
-            info_parts = [
-                f"Duration: {format_duration(duration)}",
-                f"Original size: {file_size_mb:.1f}MB",
-                f"Est. cost: ${cost:.3f}",
-            ]
+            if is_openai:
+                info_parts = [
+                    f"Duration: {format_duration(meta['duration'])}",
+                    f"Original size: {meta['size_mb']:.1f}MB",
+                    f"Est. cost: ${meta['cost']:.3f}",
+                ]
+            else:
+                info_parts = [f"Engine: {meta.get('engine', engine)}"]
+                if meta.get("model"):
+                    info_parts.append(f"Model: {meta['model']}")
+                if meta.get("language"):
+                    info_parts.append(f"Language: {meta['language']}")
+                if meta.get("processing_time"):
+                    info_parts.append(f"Time: {meta['processing_time']:.2f}s")
+                if meta.get("segments"):
+                    info_parts.append(f"Segments: {meta['segments']}")
 
             progress(1.0, desc="Done!")
             return "Transcription complete!", text, output_file.name, " | ".join(info_parts)
 
-        # --- Multiple files ---
+        # -------------------------------------------------------------------
+        # Multiple files
+        # -------------------------------------------------------------------
         total = len(paths)
         succeeded = 0
         combined_texts: List[str] = []
-        per_file_outputs: List[Tuple[str, str]] = []  # (filename, content)
+        per_file_outputs: List[Tuple[str, str]] = []
         total_duration = 0.0
         total_size = 0.0
+        total_cost = 0.0
         errors: List[str] = []
 
         for idx, audio_path in enumerate(paths):
             step = (idx + 1) / (total + 1)
             progress(step, desc=f"Transcribing {audio_path.name} ({idx+1}/{total})...")
             try:
-                text, duration = _transcribe_single(
-                    audio_path, output_format, language, client
-                )
+                text, meta = do_one(audio_path)
                 succeeded += 1
-                total_duration += duration
-                total_size += get_file_size_mb(str(audio_path))
                 combined_texts.append(f"=== {audio_path.name} ===\n{text}")
                 output_suffix = output_format if output_format != "verbose_json" else "json"
                 per_file_outputs.append((
-                    f"{audio_path.stem}.{output_suffix}", text
+                    f"{audio_path.stem}.{output_suffix}", text,
                 ))
+                if is_openai:
+                    total_duration += meta.get("duration", 0)
+                    total_size += meta.get("size_mb", 0)
+                    total_cost += meta.get("cost", 0)
             except Exception as e:
                 logger.error(f"Failed to transcribe {audio_path.name}: {e}")
                 combined_texts.append(f"=== {audio_path.name} ===\n[failed: {e}]")
@@ -306,19 +465,24 @@ def transcribe(
 
         # Build zip with individual output files
         zip_path = tempfile.NamedTemporaryFile(
-            suffix=".zip", prefix="transcriptions_", delete=False
+            suffix=".zip", prefix="transcriptions_", delete=False,
         ).name
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             for name, content in per_file_outputs:
                 zf.writestr(name, content)
 
-        cost = (total_duration / 60) * 0.006
-        info_parts = [
-            f"Files: {succeeded}/{total}",
-            f"Total duration: {format_duration(total_duration)}",
-            f"Total size: {total_size:.1f}MB",
-            f"Est. cost: ${cost:.3f}",
-        ]
+        if is_openai:
+            info_parts = [
+                f"Files: {succeeded}/{total}",
+                f"Total duration: {format_duration(total_duration)}",
+                f"Total size: {total_size:.1f}MB",
+                f"Est. cost: ${total_cost:.3f}",
+            ]
+        else:
+            info_parts = [
+                f"Files: {succeeded}/{total}",
+                f"Engine: {engine}",
+            ]
 
         status = f"Transcribed {succeeded}/{total} files"
         if errors:
@@ -332,21 +496,68 @@ def transcribe(
         return f"Error: {str(e)}", "", None, ""
 
 
+# ---------------------------------------------------------------------------
+# Gradio UI
+# ---------------------------------------------------------------------------
+
 def create_app():
     """Create and return the Gradio app."""
+
+    # Build engine choices: OpenAI is always available
+    engine_choices = [("OpenAI API (cloud)", "openai")]
+    if WHISPER_LOCAL_AVAILABLE:
+        engine_choices.append(("Whisper (local)", "whisper"))
+    if GOOGLE_SR_AVAILABLE:
+        engine_choices.append(("Google Speech", "google"))
+    if VOSK_AVAILABLE:
+        engine_choices.append(("Vosk (offline)", "vosk"))
 
     with gr.Blocks() as app:
 
         gr.Markdown("# Audio Transcriber")
-        gr.Markdown("Transcribe audio files to text using OpenAI Whisper. Supports MP3, WAV, M4A, FLAC, OGG, and more. Large files are automatically compressed.")
+        gr.Markdown(
+            "Transcribe audio files to text. "
+            "Supports MP3, WAV, M4A, FLAC, OGG, and more. "
+            "Large files are automatically compressed for the OpenAI API."
+        )
 
         with gr.Row():
             with gr.Column(scale=1):
-                # Input - use File component to accept all formats including MP4
+                # File upload
                 audio_input = gr.File(
                     label="Upload Audio/Video File(s)",
                     file_count="multiple",
-                    file_types=[".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm", ".mp4", ".mpeg", ".mpga", ".oga", ".opus", ".wma", ".aac"],
+                    file_types=[
+                        ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm",
+                        ".mp4", ".mpeg", ".mpga", ".oga", ".opus",
+                        ".wma", ".aac",
+                    ],
+                )
+
+                # Engine selector
+                engine = gr.Dropdown(
+                    choices=engine_choices,
+                    value="openai",
+                    label="Engine",
+                )
+
+                # Model size (visible only for local whisper)
+                model = gr.Dropdown(
+                    choices=[
+                        "tiny", "base", "small", "medium",
+                        "large", "large-v2", "large-v3",
+                    ],
+                    value="base",
+                    label="Model Size",
+                    visible=False,
+                )
+
+                # Task (visible only for local whisper)
+                task = gr.Radio(
+                    choices=["transcribe", "translate"],
+                    value="transcribe",
+                    label="Task",
+                    visible=False,
                 )
 
                 with gr.Row():
@@ -393,10 +604,7 @@ def create_app():
 
             with gr.Column(scale=1):
                 # Output
-                status = gr.Textbox(
-                    label="Status",
-                    interactive=False,
-                )
+                status = gr.Textbox(label="Status", interactive=False)
 
                 transcription = gr.Textbox(
                     label="Transcription",
@@ -406,30 +614,50 @@ def create_app():
                 )
 
                 with gr.Row():
-                    download = gr.File(
-                        label="Download",
-                        scale=2,
-                    )
-                    info = gr.Textbox(
-                        label="Info",
-                        interactive=False,
-                        scale=1,
-                    )
+                    download = gr.File(label="Download", scale=2)
+                    info = gr.Textbox(label="Info", interactive=False, scale=1)
 
-        # Connect
+        # Toggle model/task visibility based on engine
+        def _on_engine_change(eng):
+            is_whisper_local = eng == "whisper"
+            return (
+                gr.update(visible=is_whisper_local),
+                gr.update(visible=is_whisper_local),
+            )
+
+        engine.change(
+            fn=_on_engine_change,
+            inputs=[engine],
+            outputs=[model, task],
+        )
+
+        # Connect button
         transcribe_btn.click(
             fn=transcribe,
-            inputs=[audio_input, output_format, language],
+            inputs=[audio_input, engine, output_format, language, model, task],
             outputs=[status, transcription, download, info],
         )
 
         # Footer
-        gr.Markdown("---\n*Powered by OpenAI Whisper API | $0.006/minute*")
+        engines_available = ["OpenAI API"]
+        if WHISPER_LOCAL_AVAILABLE:
+            engines_available.append("Whisper (local)")
+        if GOOGLE_SR_AVAILABLE:
+            engines_available.append("Google Speech")
+        if VOSK_AVAILABLE:
+            engines_available.append("Vosk")
+        footer = " | ".join(engines_available)
+        gr.Markdown(f"---\n*Available engines: {footer}*")
 
     return app
 
 
-if __name__ == "__main__":
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    """Entry point for the web app (used by setup.py console_scripts)."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Audio Transcriber Web App")
@@ -444,3 +672,7 @@ if __name__ == "__main__":
         server_port=args.port,
         share=args.share,
     )
+
+
+if __name__ == "__main__":
+    main()

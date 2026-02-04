@@ -39,7 +39,7 @@ FROM dependencies as app
 
 # Copy application code
 COPY transcribe.py .
-COPY web_app.py .
+COPY app.py .
 COPY examples.py .
 COPY config.yaml .
 COPY setup.py .
@@ -50,7 +50,7 @@ COPY README.md .
 RUN mkdir -p /app/models /app/input /app/output
 
 # Set proper permissions
-RUN chmod +x transcribe.py web_app.py
+RUN chmod +x transcribe.py app.py
 
 # Expose port for web interface
 EXPOSE 7860
@@ -60,7 +60,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:7860/ || exit 1
 
 # Default command: run web interface
-CMD ["python", "web_app.py"]
+CMD ["python", "app.py"]
 
 # Alternative commands:
 # For CLI: docker run audio-transcriber python transcribe.py audio.m4a
@@ -75,7 +75,7 @@ RUN pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu
 
 # Copy application code
 COPY transcribe.py .
-COPY web_app.py .
+COPY app.py .
 COPY examples.py .
 COPY config.yaml .
 COPY setup.py .
@@ -86,7 +86,7 @@ COPY README.md .
 RUN mkdir -p /app/models /app/input /app/output
 
 # Set proper permissions
-RUN chmod +x transcribe.py web_app.py
+RUN chmod +x transcribe.py app.py
 
 # Expose port
 EXPOSE 7860
@@ -96,4 +96,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:7860/ || exit 1
 
 # Default command
-CMD ["python", "web_app.py"]
+CMD ["python", "app.py"]

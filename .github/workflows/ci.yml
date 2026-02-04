@@ -35,7 +35,7 @@ jobs:
         continue-on-error: true
 
       - name: Run MyPy (type checking)
-        run: mypy transcribe.py web_app.py --ignore-missing-imports
+        run: mypy transcribe.py app.py --ignore-missing-imports
         continue-on-error: true
 
   # Test on multiple Python versions
@@ -90,14 +90,14 @@ jobs:
       - name: Check Python syntax
         run: |
           python -m py_compile transcribe.py
-          python -m py_compile web_app.py
+          python -m py_compile app.py
           python -m py_compile examples.py
           python -m py_compile setup.py
 
       - name: Test file structure
         run: |
           test -f transcribe.py
-          test -f web_app.py
+          test -f app.py
           test -f config.yaml
           test -f requirements.txt
           test -f setup.py

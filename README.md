@@ -133,7 +133,7 @@ python transcribe.py audio.mp3 --engine google
 
 ```bash
 # Start web server
-python web_app.py
+python app.py
 
 # Access at http://localhost:7860
 ```
@@ -227,16 +227,16 @@ python transcribe.py audio.m4a --device cpu
 Launch the web interface:
 
 ```bash
-python web_app.py
+python app.py
 
 # Custom port
-python web_app.py --port 8080
+python app.py --port 8080
 
 # Make publicly accessible
-python web_app.py --share
+python app.py --share
 
 # Custom host
-python web_app.py --host 0.0.0.0 --port 7860
+python app.py --host 0.0.0.0 --port 7860
 ```
 
 Features:

@@ -50,7 +50,7 @@ setup(
         "Documentation": "https://github.com/yourusername/audio-transcriber#readme",
         "Source Code": "https://github.com/yourusername/audio-transcriber",
     },
-    py_modules=["transcribe", "web_app", "examples"],
+    py_modules=["transcribe", "app", "examples"],
     python_requires=">=3.8",
     install_requires=requirements,
     extras_require={
@@ -70,7 +70,7 @@ setup(
     entry_points={
         'console_scripts': [
             'audio-transcriber=transcribe:main',
-            'audio-transcriber-web=web_app:main',
+            'audio-transcriber-web=app:main',
         ],
     },
     classifiers=[

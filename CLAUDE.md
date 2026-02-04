@@ -11,7 +11,7 @@ Audio Transcriber is a production-ready audio transcription tool that supports m
 ```
 audio-transcriber/
 ├── transcribe.py           # Main transcription module with CLI
-├── web_app.py             # Gradio web interface
+├── app.py                 # Unified Gradio web interface (OpenAI API + local engines)
 ├── examples.py            # Usage examples and demonstrations
 ├── config.yaml            # Configuration file
 ├── requirements.txt       # Core Python dependencies
@@ -53,10 +53,10 @@ audio-transcriber/
    - Manages batch processing
    - Saves output in multiple formats
 
-5. **Web Interface** (web_app.py)
-   - Gradio-based UI
+5. **Web Interface** (app.py)
+   - Unified Gradio-based UI with engine selector (OpenAI API + local engines)
    - File upload, engine selection, result download
-   - Real-time status updates
+   - Local engines available only when their dependencies are installed
 
 ## Common Development Tasks
 
@@ -70,10 +70,10 @@ python transcribe.py audio.m4a
 python transcribe.py audio.m4a --engine whisper --model base --output-format srt
 
 # Web interface
-python web_app.py
+python app.py
 
 # With custom port
-python web_app.py --port 8080
+python app.py --port 8080
 ```
 
 ### Testing
@@ -84,7 +84,7 @@ python -c "import transcribe; print('OK')"
 
 # CLI help
 python transcribe.py --help
-python web_app.py --help
+python app.py --help
 
 # Run examples
 python examples.py
