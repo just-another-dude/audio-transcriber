@@ -1,3 +1,19 @@
+# Audio files
+*.m4a
+*.mp3
+*.wav
+*.flac
+*.ogg
+*.wma
+*.aac
+
+# Transcription outputs
+*.srt
+*.vtt
+transcription*.txt
+*_transcript*.txt
+transcription_log.txt
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
