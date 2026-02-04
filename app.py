@@ -7,7 +7,9 @@ import os
 import subprocess
 import tempfile
 import logging
+import zipfile
 from pathlib import Path
+from typing import List, Optional, Tuple
 from dotenv import load_dotenv
 import gradio as gr
 from openai import OpenAI
@@ -142,19 +144,87 @@ def format_duration(seconds: float) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+def _transcribe_single(
+    audio_path: Path,
+    output_format: str,
+    language: str,
+    client: OpenAI,
+) -> Tuple[str, float]:
+    """Transcribe a single audio file. Returns (transcription_text, duration)."""
+    file_size_mb = get_file_size_mb(str(audio_path))
+    duration = get_audio_duration(str(audio_path))
+
+    logger.info(f"File: {audio_path.name}")
+    logger.info(f"Size: {file_size_mb:.2f}MB, Duration: {duration:.1f}s")
+
+    if audio_path.suffix.lower() not in SUPPORTED_FORMATS:
+        raise ValueError(
+            f"Unsupported format: {audio_path.suffix}. "
+            f"Supported: {', '.join(SUPPORTED_FORMATS)}"
+        )
+
+    # Compress if needed
+    transcribe_path = str(audio_path)
+    compressed = False
+
+    if file_size_mb > MAX_FILE_SIZE_MB:
+        logger.info(f"File exceeds {MAX_FILE_SIZE_MB}MB limit, compressing...")
+        transcribe_path = compress_audio(str(audio_path))
+        compressed = True
+        logger.info(f"Compression complete: {get_file_size_mb(transcribe_path):.2f}MB")
+
+    # Verify file size before sending to API
+    final_size_bytes = Path(transcribe_path).stat().st_size
+    if final_size_bytes > 26214400:  # OpenAI's exact limit
+        if compressed:
+            Path(transcribe_path).unlink()
+        raise ValueError(
+            f"File too large ({get_file_size_mb(transcribe_path):.2f}MB). OpenAI limit is 25MB."
+        )
+
+    # Prepare API parameters
+    api_format = "text" if output_format == "txt" else output_format
+    params = {
+        "model": "whisper-1",
+        "response_format": api_format if api_format in ["text", "srt", "vtt", "verbose_json"] else "text",
+    }
+    if language != "auto":
+        params["language"] = language
+
+    logger.info("Sending to OpenAI API...")
+
+    with open(transcribe_path, "rb") as audio:
+        response = client.audio.transcriptions.create(file=audio, **params)
+
+    logger.info("Transcription successful!")
+
+    # Clean up compressed file
+    if compressed and Path(transcribe_path).exists():
+        Path(transcribe_path).unlink()
+
+    # Handle response
+    if api_format == "verbose_json":
+        import json
+        text = json.dumps(response.model_dump(), indent=2, ensure_ascii=False)
+    else:
+        text = response if isinstance(response, str) else response.text
+
+    return text, duration
+
+
 def transcribe(
-    audio_file,
+    audio_files,
     output_format: str = "text",
     language: str = "auto",
     progress=gr.Progress()
 ) -> tuple:
     """
-    Transcribe audio file using OpenAI Whisper API.
+    Transcribe one or more audio files using OpenAI Whisper API.
 
     Returns: (status, transcription, output_file, info)
     """
-    if audio_file is None:
-        return "Please upload an audio file", "", None, ""
+    if not audio_files:
+        return "Please upload at least one audio file", "", None, ""
 
     # Check API key
     api_key = os.getenv("OPENAI_API_KEY")
@@ -162,116 +232,100 @@ def transcribe(
         return "OpenAI API key not found. Set OPENAI_API_KEY in .env file", "", None, ""
 
     try:
-        # Handle gr.File input (returns path string or file object)
-        if hasattr(audio_file, 'name'):
-            audio_file = audio_file.name
-        audio_path = Path(audio_file)
-        file_size_mb = get_file_size_mb(str(audio_path))
-        duration = get_audio_duration(str(audio_path))
-
-        logger.info(f"=== New transcription request ===")
-        logger.info(f"File: {audio_path.name}")
-        logger.info(f"Size: {file_size_mb:.2f}MB, Duration: {duration:.1f}s")
-        logger.info(f"Format: {output_format}, Language: {language}")
-
-        progress(0.1, desc="Checking file...")
-
-        # Check file format
-        if audio_path.suffix.lower() not in SUPPORTED_FORMATS:
-            logger.error(f"Unsupported format: {audio_path.suffix}")
-            return f"Unsupported format: {audio_path.suffix}. Supported: {', '.join(SUPPORTED_FORMATS)}", "", None, ""
-
-        # Compress if needed
-        transcribe_path = str(audio_path)
-        compressed = False
-
-        if file_size_mb > MAX_FILE_SIZE_MB:
-            logger.info(f"File exceeds {MAX_FILE_SIZE_MB}MB limit, compressing...")
-            progress(0.2, desc=f"Compressing ({file_size_mb:.1f}MB > 24MB limit)...")
-            transcribe_path = compress_audio(str(audio_path))
-            compressed = True
-            new_size = get_file_size_mb(transcribe_path)
-            logger.info(f"Compression complete: {new_size:.2f}MB")
-            progress(0.4, desc=f"Compressed to {new_size:.1f}MB")
-
-        # CRITICAL: Verify file size before sending to API
-        final_size_mb = get_file_size_mb(transcribe_path)
-        final_size_bytes = Path(transcribe_path).stat().st_size
-        logger.info(f"Final file to send: {final_size_mb:.2f}MB ({final_size_bytes} bytes)")
-
-        if final_size_bytes > 26214400:  # OpenAI's exact limit
-            logger.error(f"File still too large: {final_size_bytes} bytes > 26214400 limit")
-            if compressed:
-                Path(transcribe_path).unlink()
-            return f"Error: File too large ({final_size_mb:.2f}MB). OpenAI limit is 25MB.", "", None, ""
-
-        # Initialize OpenAI client
         client = OpenAI(api_key=api_key)
 
-        # Prepare API parameters
-        api_format = "text" if output_format == "txt" else output_format
-        params = {
-            "model": "whisper-1",
-            "response_format": api_format if api_format in ["text", "srt", "vtt", "verbose_json"] else "text",
-        }
+        # Normalise to list of Path objects
+        paths = []
+        for f in audio_files:
+            paths.append(Path(f.name if hasattr(f, 'name') else f))
 
-        if language != "auto":
-            params["language"] = language
+        logger.info(f"=== New transcription request ({len(paths)} file(s)) ===")
+        logger.info(f"Format: {output_format}, Language: {language}")
 
-        logger.info(f"Sending to OpenAI API...")
-        progress(0.5, desc="Transcribing with OpenAI Whisper...")
+        # --- Single file (original behaviour) ---
+        if len(paths) == 1:
+            audio_path = paths[0]
+            progress(0.1, desc="Checking file...")
 
-        # Transcribe
-        with open(transcribe_path, "rb") as audio:
-            response = client.audio.transcriptions.create(file=audio, **params)
+            text, duration = _transcribe_single(
+                audio_path, output_format, language, client
+            )
 
-        logger.info("Transcription successful!")
+            progress(0.9, desc="Processing results...")
 
-        progress(0.9, desc="Processing results...")
+            output_suffix = output_format if output_format != "verbose_json" else "json"
+            output_file = tempfile.NamedTemporaryFile(
+                suffix=f".{output_suffix}",
+                prefix=f"{audio_path.stem}_",
+                delete=False, mode='w', encoding='utf-8'
+            )
+            output_file.write(text)
+            output_file.close()
 
-        # Handle response
-        if api_format == "verbose_json":
-            import json
-            transcription = json.dumps(response.model_dump(), indent=2, ensure_ascii=False)
-        else:
-            transcription = response if isinstance(response, str) else response.text
+            file_size_mb = get_file_size_mb(str(audio_path))
+            cost = (duration / 60) * 0.006
+            info_parts = [
+                f"Duration: {format_duration(duration)}",
+                f"Original size: {file_size_mb:.1f}MB",
+                f"Est. cost: ${cost:.3f}",
+            ]
 
-        # Clean up compressed file
-        if compressed and Path(transcribe_path).exists():
-            Path(transcribe_path).unlink()
+            progress(1.0, desc="Done!")
+            return "Transcription complete!", text, output_file.name, " | ".join(info_parts)
 
-        # Save output file
-        output_suffix = output_format if output_format != "verbose_json" else "json"
-        output_file = tempfile.NamedTemporaryFile(
-            suffix=f".{output_suffix}",
-            prefix=f"{audio_path.stem}_",
-            delete=False,
-            mode='w',
-            encoding='utf-8'
-        )
-        output_file.write(transcription)
-        output_file.close()
+        # --- Multiple files ---
+        total = len(paths)
+        succeeded = 0
+        combined_texts: List[str] = []
+        per_file_outputs: List[Tuple[str, str]] = []  # (filename, content)
+        total_duration = 0.0
+        total_size = 0.0
+        errors: List[str] = []
 
-        # Calculate cost estimate
-        cost = (duration / 60) * 0.006  # $0.006 per minute
+        for idx, audio_path in enumerate(paths):
+            step = (idx + 1) / (total + 1)
+            progress(step, desc=f"Transcribing {audio_path.name} ({idx+1}/{total})...")
+            try:
+                text, duration = _transcribe_single(
+                    audio_path, output_format, language, client
+                )
+                succeeded += 1
+                total_duration += duration
+                total_size += get_file_size_mb(str(audio_path))
+                combined_texts.append(f"=== {audio_path.name} ===\n{text}")
+                output_suffix = output_format if output_format != "verbose_json" else "json"
+                per_file_outputs.append((
+                    f"{audio_path.stem}.{output_suffix}", text
+                ))
+            except Exception as e:
+                logger.error(f"Failed to transcribe {audio_path.name}: {e}")
+                combined_texts.append(f"=== {audio_path.name} ===\n[failed: {e}]")
+                errors.append(audio_path.name)
 
-        # Build info string
+        display_text = "\n\n".join(combined_texts)
+
+        # Build zip with individual output files
+        zip_path = tempfile.NamedTemporaryFile(
+            suffix=".zip", prefix="transcriptions_", delete=False
+        ).name
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for name, content in per_file_outputs:
+                zf.writestr(name, content)
+
+        cost = (total_duration / 60) * 0.006
         info_parts = [
-            f"Duration: {format_duration(duration)}",
-            f"Original size: {file_size_mb:.1f}MB",
+            f"Files: {succeeded}/{total}",
+            f"Total duration: {format_duration(total_duration)}",
+            f"Total size: {total_size:.1f}MB",
+            f"Est. cost: ${cost:.3f}",
         ]
-        if compressed:
-            info_parts.append("(compressed for API)")
-        info_parts.append(f"Est. cost: ${cost:.3f}")
+
+        status = f"Transcribed {succeeded}/{total} files"
+        if errors:
+            status += f" (failed: {', '.join(errors)})"
 
         progress(1.0, desc="Done!")
-
-        return (
-            f"Transcription complete!",
-            transcription,
-            output_file.name,
-            " | ".join(info_parts)
-        )
+        return status, display_text, zip_path, " | ".join(info_parts)
 
     except Exception as e:
         logger.exception(f"Transcription failed: {e}")
@@ -290,7 +344,8 @@ def create_app():
             with gr.Column(scale=1):
                 # Input - use File component to accept all formats including MP4
                 audio_input = gr.File(
-                    label="Upload Audio/Video File",
+                    label="Upload Audio/Video File(s)",
+                    file_count="multiple",
                     file_types=[".mp3", ".wav", ".m4a", ".flac", ".ogg", ".webm", ".mp4", ".mpeg", ".mpga", ".oga", ".opus", ".wma", ".aac"],
                 )
 
