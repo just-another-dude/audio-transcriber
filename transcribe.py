@@ -430,7 +430,10 @@ class GoogleSpeechTranscriber:
         Returns:
             TranscriptionResult object
         """
-        language = kwargs.get('language', self.config.get('language', 'en-US'))
+        language = kwargs.get('language') or self.config.get('language', 'en-US')
+        # Ensure language is always a string, not None
+        if language is None or language == 'auto':
+            language = 'en-US'
         show_all = kwargs.get('show_all', self.config.get('show_all', False))
 
         self.logger.info("Transcribing with Google Speech Recognition...")
