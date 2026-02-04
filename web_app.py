@@ -8,7 +8,8 @@ Provides an easy-to-use web UI for transcribing audio files.
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
+import zipfile
 
 import gradio as gr
 
@@ -56,19 +57,58 @@ class TranscriberWebApp:
 
         logger.info(f"Available engines: {', '.join(self.available_engines)}")
 
+    def _format_result(self, result: TranscriptionResult, output_format: str) -> str:
+        """Format a single transcription result according to the output format."""
+        if output_format == "json":
+            return result.to_json()
+        elif output_format == "srt":
+            return result.to_srt()
+        elif output_format == "vtt":
+            return result.to_vtt()
+        return result.text
+
+    def _format_metadata(self, result: TranscriptionResult, filename: str = "") -> str:
+        """Format metadata for a single transcription result."""
+        lines = []
+        if filename:
+            lines.append(f"**File:** {filename}")
+        lines.append(f"**Engine:** {result.engine}")
+        if result.model:
+            lines.append(f"**Model:** {result.model}")
+        if result.language:
+            lines.append(f"**Language:** {result.language}")
+        if result.duration:
+            lines.append(f"**Processing Time:** {result.duration:.2f}s")
+        if result.segments:
+            lines.append(f"**Segments:** {len(result.segments)}")
+        return "\n".join(lines)
+
+    def _apply_engine_config(self, engine: str, model: str, task: str):
+        """Update transcriber config for the selected engine."""
+        if engine == "whisper":
+            self.transcriber.config['whisper']['model'] = model
+            self.transcriber.config['whisper']['task'] = task
+
+            # Clear cached model if model changed
+            if 'whisper' in self.transcriber.engines:
+                current_model = self.transcriber.engines['whisper'].model_name
+                if current_model != model:
+                    logger.info(f"Model changed from {current_model} to {model}, clearing cache")
+                    self.transcriber.engines.pop('whisper')
+
     def transcribe_audio(
         self,
-        audio_file,
+        audio_files: Optional[List],
         engine: str,
         model: str,
         language: str,
         output_format: str,
         task: str = "transcribe"
     ) -> Tuple[str, str, str, Optional[str]]:
-        """Transcribe audio file through Gradio interface.
+        """Transcribe one or more audio files through Gradio interface.
 
         Args:
-            audio_file: Uploaded audio file from Gradio
+            audio_files: List of uploaded files from Gradio
             engine: Transcription engine to use
             model: Model size (for Whisper)
             language: Language code or "auto"
@@ -78,70 +118,75 @@ class TranscriberWebApp:
         Returns:
             Tuple of (status_message, transcription_text, download_file_path, metadata)
         """
-        if audio_file is None:
-            return "❌ Please upload an audio file", "", None, ""
+        if not audio_files:
+            return "Please upload at least one audio file", "", None, ""
 
         try:
-            # Get file path
-            audio_path = Path(audio_file.name if hasattr(audio_file, 'name') else audio_file)
+            self._apply_engine_config(engine, model, task)
+            lang_arg = language if language != "auto" else None
 
-            logger.info(f"Processing: {audio_path.name}")
+            file_paths = [
+                Path(f.name if hasattr(f, 'name') else f)
+                for f in audio_files
+            ]
+            logger.info(f"Processing {len(file_paths)} file(s): "
+                        f"{', '.join(p.name for p in file_paths)}")
 
-            # Update config based on user selection
-            if engine == "whisper":
-                self.transcriber.config['whisper']['model'] = model
-                self.transcriber.config['whisper']['task'] = task
+            if len(file_paths) == 1:
+                # Single file — same behaviour as before
+                result = self.transcriber.transcribe_file(
+                    file_paths[0], engine=engine, language=lang_arg
+                )
+                output_content = self._format_result(result, output_format)
 
-                # Clear cached model if model changed
-                if 'whisper' in self.transcriber.engines:
-                    current_model = self.transcriber.engines['whisper'].model_name
-                    if current_model != model:
-                        logger.info(f"Model changed from {current_model} to {model}, clearing cache")
-                        self.transcriber.engines.pop('whisper')
+                output_filename = f"{file_paths[0].stem}_transcription.{output_format}"
+                output_path = Path(f"/tmp/{output_filename}")
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(output_content, encoding='utf-8')
 
-            # Transcribe
-            result = self.transcriber.transcribe_file(
-                audio_path,
-                engine=engine,
-                language=language if language != "auto" else None
+                metadata = self._format_metadata(result)
+                status = f"Transcription completed successfully using {engine}"
+                return status, output_content, str(output_path), metadata
+
+            # Multiple files — use batch API
+            results = self.transcriber.transcribe_batch(
+                file_paths, engine=engine, language=lang_arg
             )
 
-            # Format output based on selected format
-            if output_format == "txt":
-                output_content = result.text
-            elif output_format == "json":
-                output_content = result.to_json()
-            elif output_format == "srt":
-                output_content = result.to_srt()
-            elif output_format == "vtt":
-                output_content = result.to_vtt()
-            else:
-                output_content = result.text
+            # Aggregate outputs
+            succeeded = 0
+            combined_texts: List[str] = []
+            combined_metadata: List[str] = []
+            per_file_outputs: List[Tuple[str, str]] = []  # (filename, content)
 
-            # Save to temporary file for download
-            output_filename = f"{audio_path.stem}_transcription.{output_format}"
-            output_path = Path(f"/tmp/{output_filename}")
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            for path, result in zip(file_paths, results):
+                if result is None:
+                    combined_texts.append(f"=== {path.name} ===\n[transcription failed]\n")
+                    combined_metadata.append(f"**File:** {path.name}\n*Transcription failed*")
+                    continue
+                succeeded += 1
+                content = self._format_result(result, output_format)
+                combined_texts.append(f"=== {path.name} ===\n{content}\n")
+                combined_metadata.append(self._format_metadata(result, filename=path.name))
+                per_file_outputs.append((
+                    f"{path.stem}_transcription.{output_format}", content
+                ))
 
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(output_content)
+            display_text = "\n".join(combined_texts)
+            metadata = "\n\n---\n\n".join(combined_metadata)
 
-            # Create metadata
-            metadata_lines = [
-                f"**Engine:** {result.engine}",
-                f"**Model:** {result.model}" if result.model else "",
-                f"**Language:** {result.language}" if result.language else "",
-                f"**Processing Time:** {result.duration:.2f}s" if result.duration else "",
-                f"**Segments:** {len(result.segments)}" if result.segments else "",
-            ]
-            metadata = "\n".join([line for line in metadata_lines if line])
+            # Build a zip with individual output files
+            zip_path = Path("/tmp/transcriptions.zip")
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for name, content in per_file_outputs:
+                    zf.writestr(name, content)
 
-            status = f"✅ Transcription completed successfully using {engine}"
-
-            return status, output_content, str(output_path), metadata
+            total = len(file_paths)
+            status = f"Transcribed {succeeded}/{total} files successfully using {engine}"
+            return status, display_text, str(zip_path), metadata
 
         except Exception as e:
-            error_msg = f"❌ Error: {str(e)}"
+            error_msg = f"Error: {str(e)}"
             logger.error(f"Transcription failed: {e}", exc_info=True)
             return error_msg, "", None, ""
 
@@ -168,10 +213,13 @@ class TranscriberWebApp:
                 with gr.Column(scale=1):
                     # Input section
                     gr.Markdown("### 📁 Input")
-                    audio_input = gr.Audio(
-                        label="Upload Audio File",
-                        type="filepath",
-                        sources=["upload", "microphone"]
+                    audio_input = gr.File(
+                        label="Upload Audio File(s)",
+                        file_count="multiple",
+                        file_types=[
+                            ".mp3", ".wav", ".m4a", ".flac", ".ogg",
+                            ".wma", ".aac", ".opus", ".webm", ".mp4"
+                        ]
                     )
 
                     # Engine selection
