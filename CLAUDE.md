@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Security Notice
+
+**This is a PUBLIC repository.** Be extremely careful to never:
+- Commit API keys, tokens, or secrets
+- Include credentials in code or comments
+- Add `.env` files or any sensitive configuration
+- Expose personal information
+
+Always verify changes don't contain sensitive data before committing.
+
 ## Project Overview
 
 Audio Transcriber is a production-ready audio transcription tool that supports multiple AI engines (OpenAI Whisper, Google Speech Recognition, and Vosk) and various audio formats, with special emphasis on M4A file support.
