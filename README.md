@@ -2,7 +2,7 @@
 
 A comprehensive, production-ready audio transcription tool supporting multiple AI engines and various audio formats, with special focus on M4A files.
 
-[![CI/CD](https://github.com/yourusername/audio-transcriber/workflows/CI/CD%20Pipeline/badge.svg)](https://github.com/yourusername/audio-transcriber/actions)
+[![CI/CD](https://github.com/just-another-dude/audio-transcriber/workflows/CI/CD%20Pipeline/badge.svg)](https://github.com/just-another-dude/audio-transcriber/actions)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -82,7 +82,7 @@ choco install ffmpeg
 #### Option 1: Using pip (recommended)
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/audio-transcriber.git
+git clone https://github.com/just-another-dude/audio-transcriber.git
 cd audio-transcriber
 
 # Install with pip
@@ -603,7 +603,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/audio-transcriber.git
+git clone https://github.com/just-another-dude/audio-transcriber.git
 cd audio-transcriber
 
 # Install in development mode
@@ -636,9 +636,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📧 Support
 
-- **Issues:** [GitHub Issues](https://github.com/yourusername/audio-transcriber/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/yourusername/audio-transcriber/discussions)
-- **Documentation:** [Wiki](https://github.com/yourusername/audio-transcriber/wiki)
+- **Issues:** [GitHub Issues](https://github.com/just-another-dude/audio-transcriber/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/just-another-dude/audio-transcriber/discussions)
+- **Documentation:** [Wiki](https://github.com/just-another-dude/audio-transcriber/wiki)
 
 ## 🗺️ Roadmap
 
