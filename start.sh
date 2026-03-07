@@ -4,7 +4,7 @@
 cd "$(dirname "$0")"
 
 # Check if already running
-if pgrep -f "python3.*app.py" > /dev/null; then
+if pgrep -f "python.*app.py" > /dev/null; then
     echo "App is already running!"
     echo "Access at: http://localhost:7860"
     echo ""
@@ -16,12 +16,12 @@ fi
 > /tmp/transcriber.log
 
 echo "Starting Audio Transcriber..."
-python3 app.py --host 127.0.0.1 &
+venv/bin/python app.py --host 127.0.0.1 &
 
 # Wait for startup
 sleep 3
 
-if pgrep -f "python3.*app.py" > /dev/null; then
+if pgrep -f "python.*app.py" > /dev/null; then
     echo ""
     echo "Audio Transcriber is running!"
     echo "Access at: http://localhost:7860"
