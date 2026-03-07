@@ -9,7 +9,8 @@ A comprehensive, production-ready audio transcription tool supporting multiple A
 ## ✨ Features
 
 - **Multiple Transcription Engines**
-  - 🤖 OpenAI Whisper (primary, most accurate)
+  - ☁️ OpenAI Whisper API (cloud, easiest setup — just needs an API key)
+  - 🤖 OpenAI Whisper (local, most accurate, GPU-accelerated)
   - 🌐 Google Speech Recognition
   - 📱 Vosk (offline support)
 
@@ -77,6 +78,16 @@ Download from [FFmpeg official website](https://ffmpeg.org/download.html) or use
 choco install ffmpeg
 ```
 
+### Environment Setup
+
+For the OpenAI Whisper API (cloud engine), create a `.env` file in the project root:
+
+```bash
+OPENAI_API_KEY=your-api-key-here
+```
+
+Get your API key from [platform.openai.com/api-keys](https://platform.openai.com/api-keys). The `.env` file is gitignored and will not be committed.
+
 ### Install Audio Transcriber
 
 #### Option 1: Using pip (recommended)
@@ -132,10 +143,16 @@ python transcribe.py audio.mp3 --engine google
 ### Launch Web Interface
 
 ```bash
-# Start web server
+# Quick start (uses venv, runs in background)
+./start.sh
+
+# Or start directly
 python app.py
 
 # Access at http://localhost:7860
+
+# Stop the background server
+./stop.sh
 ```
 
 ### Python API
@@ -240,10 +257,9 @@ python app.py --host 0.0.0.0 --port 7860
 ```
 
 Features:
-- 📁 Drag-and-drop file upload
-- 🎤 Direct microphone recording
-- ⚙️ Engine and model selection
-- 🌍 Language selection
+- 📁 Drag-and-drop file upload (single or multiple files)
+- ⚙️ Engine selector (OpenAI API, Whisper local, Google, Vosk)
+- 🌍 Language selection with auto-detection
 - 📥 Download results in various formats
 - 📊 Real-time status updates
 
