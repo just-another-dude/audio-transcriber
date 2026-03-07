@@ -27,3 +27,6 @@ typing-extensions>=4.5.0
 
 # Logging enhancements
 coloredlogs>=15.0.1
+
+# Env Vars
+python-dotenv
