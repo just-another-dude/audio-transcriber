@@ -264,6 +264,7 @@ def _transcribe_single(
     output_format: str,
     language: str,
     client: OpenAI,
+    progress_fn=None,
 ) -> Tuple[str, float]:
     """Transcribe a single audio file via OpenAI API. Returns (text, duration)."""
     file_size_mb = get_file_size_mb(str(audio_path))
@@ -283,6 +284,8 @@ def _transcribe_single(
     compressed = False
 
     if file_size_mb > MAX_FILE_SIZE_MB:
+        if progress_fn:
+            progress_fn(0.2, desc=f"Compressing {file_size_mb:.0f}MB file...")
         logger.info(f"File exceeds {MAX_FILE_SIZE_MB}MB limit, compressing...")
         transcribe_path = compress_audio(str(audio_path))
         compressed = True
@@ -306,6 +309,9 @@ def _transcribe_single(
     if language != "auto":
         params["language"] = language
 
+    dur_str = format_duration(duration)
+    if progress_fn:
+        progress_fn(0.4, desc=f"Sending {dur_str} of audio to OpenAI API (this may take a while)...")
     logger.info("Sending to OpenAI API...")
 
     with open(transcribe_path, "rb") as audio:
@@ -360,7 +366,7 @@ def transcribe(
         # -------------------------------------------------------------------
         # Helper closures for single-file transcription per engine
         # -------------------------------------------------------------------
-        def _do_openai(audio_path: Path) -> Tuple[str, dict]:
+        def _do_openai(audio_path: Path, progress_fn=None) -> Tuple[str, dict]:
             api_key = os.getenv("OPENAI_API_KEY")
             if not api_key:
                 raise RuntimeError(
@@ -369,6 +375,7 @@ def transcribe(
             client = OpenAI(api_key=api_key)
             text, duration = _transcribe_single(
                 audio_path, output_format, language, client,
+                progress_fn=progress_fn,
             )
             file_size_mb = get_file_size_mb(str(audio_path))
             cost = (duration / 60) * 0.006
@@ -396,7 +403,10 @@ def transcribe(
             audio_path = paths[0]
             progress(0.1, desc="Checking file...")
 
-            text, meta = do_one(audio_path)
+            if is_openai:
+                text, meta = _do_openai(audio_path, progress_fn=progress)
+            else:
+                text, meta = _do_local(audio_path)
 
             progress(0.9, desc="Processing results...")
 
