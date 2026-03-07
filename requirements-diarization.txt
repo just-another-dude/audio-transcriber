@@ -1,0 +1,5 @@
+# Speaker diarization dependencies (optional)
+# Requires a HuggingFace token with access to pyannote models.
+# Set HF_TOKEN in your .env file.
+pyannote.audio>=3.1.0
+torch>=2.0.0

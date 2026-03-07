@@ -35,7 +35,7 @@ jobs:
         continue-on-error: true
 
       - name: Run MyPy (type checking)
-        run: mypy transcribe.py app.py --ignore-missing-imports
+        run: mypy transcribe.py app.py diarize.py --ignore-missing-imports
         continue-on-error: true
 
   # Test on multiple Python versions
@@ -85,21 +85,31 @@ jobs:
           # Install only lightweight dependencies for syntax/import checking
           pip install PyYAML>=6.0 tqdm>=4.65.0 typing-extensions>=4.5.0
           pip install pydub>=0.25.1 ffmpeg-python>=0.2.0
-          # Skip heavy packages: whisper, torch, gradio, librosa for CI
+          pip install coloredlogs>=15.0.1 python-dotenv>=0.19.0
+          pip install numpy>=1.24.0 scipy>=1.10.0 librosa>=0.10.0 soundfile>=0.12.1
+          pip install openai>=1.0.0 gradio>=4.0.0
+          pip install pytest>=7.0.0
+          # Skip heavy packages: whisper, torch, vosk, pyannote for CI
 
       - name: Check Python syntax
         run: |
           python -m py_compile transcribe.py
           python -m py_compile app.py
+          python -m py_compile diarize.py
           python -m py_compile examples.py
           python -m py_compile setup.py
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -v
 
       - name: Test file structure
         run: |
           test -f transcribe.py
           test -f app.py
+          test -f diarize.py
           test -f config.yaml
           test -f requirements.txt
+          test -f requirements-diarization.txt
           test -f setup.py
 
   # Docker build test (syntax only, don't actually build to save time/space)

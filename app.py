@@ -54,6 +54,21 @@ except ImportError:
     pass
 
 # ---------------------------------------------------------------------------
+# Conditional import for speaker diarization
+# ---------------------------------------------------------------------------
+try:
+    from diarize import SpeakerDiarizer, PYANNOTE_AVAILABLE
+except ImportError:
+    PYANNOTE_AVAILABLE = False
+
+# Import TranscriptionResult for OpenAI+diarize path if not already available
+if not LOCAL_ENGINES_AVAILABLE:
+    try:
+        from transcribe import TranscriptionResult
+    except ImportError:
+        pass
+
+# ---------------------------------------------------------------------------
 # Constants (OpenAI path)
 # ---------------------------------------------------------------------------
 MAX_FILE_SIZE_MB = 24  # OpenAI limit is 25MB, use 24 to be safe
@@ -119,6 +134,7 @@ class LocalTranscriberWrapper:
         language: str,
         model: str,
         task: str,
+        diarize: bool = False,
     ) -> Tuple[str, dict]:
         """Transcribe a single file via a local engine.
 
@@ -128,7 +144,7 @@ class LocalTranscriberWrapper:
         lang_arg = language if language != "auto" else None
 
         result = self.transcriber.transcribe_file(
-            audio_path, engine=engine, language=lang_arg,
+            audio_path, engine=engine, diarize=diarize, language=lang_arg,
         )
         text = self._format_result(result, output_format)
         metadata = {
@@ -138,6 +154,8 @@ class LocalTranscriberWrapper:
             "processing_time": result.duration,
             "segments": len(result.segments) if result.segments else 0,
         }
+        if result.speakers:
+            metadata["speakers"] = len(result.speakers)
         return text, metadata
 
 
@@ -343,6 +361,7 @@ def transcribe(
     language: str = "auto",
     model: str = "base",
     task: str = "transcribe",
+    diarize: bool = False,
     progress=gr.Progress(),
 ) -> tuple:
     """
@@ -373,10 +392,52 @@ def transcribe(
                     "OpenAI API key not found. Set OPENAI_API_KEY in .env file"
                 )
             client = OpenAI(api_key=api_key)
-            text, duration = _transcribe_single(
-                audio_path, output_format, language, client,
-                progress_fn=progress_fn,
-            )
+
+            if diarize and PYANNOTE_AVAILABLE:
+                # Force verbose_json to get segments with timestamps
+                raw_text, duration = _transcribe_single(
+                    audio_path, "verbose_json", language, client,
+                    progress_fn=progress_fn,
+                )
+                if progress_fn:
+                    progress_fn(0.7, desc="Running speaker diarization...")
+
+                # Parse verbose_json into a TranscriptionResult
+                raw_data = json.loads(raw_text)
+                segments = []
+                for seg in raw_data.get("segments", []):
+                    segments.append({
+                        "start": seg["start"],
+                        "end": seg["end"],
+                        "text": seg.get("text", "").strip(),
+                    })
+                result = TranscriptionResult(
+                    text=raw_data.get("text", ""),
+                    language=raw_data.get("language"),
+                    segments=segments if segments else None,
+                    engine="openai",
+                    model="whisper-1",
+                )
+
+                # Apply diarization
+                diarizer = SpeakerDiarizer()
+                result = diarizer.process_result(result, audio_path)
+
+                # Format to user's chosen output format
+                if output_format == "srt" and result.segments:
+                    text = result.to_srt()
+                elif output_format == "vtt" and result.segments:
+                    text = result.to_vtt()
+                elif output_format == "verbose_json":
+                    text = result.to_json()
+                else:
+                    text = result.text
+            else:
+                text, duration = _transcribe_single(
+                    audio_path, output_format, language, client,
+                    progress_fn=progress_fn,
+                )
+
             file_size_mb = get_file_size_mb(str(audio_path))
             cost = (duration / 60) * 0.006
             meta = {
@@ -390,6 +451,7 @@ def transcribe(
             wrapper = _get_local_transcriber()
             text, meta = wrapper.transcribe_single(
                 audio_path, engine, output_format, language, model, task,
+                diarize=diarize and PYANNOTE_AVAILABLE,
             )
             return text, meta
 
@@ -606,6 +668,12 @@ def create_app():
                         scale=1,
                     )
 
+                diarize_checkbox = gr.Checkbox(
+                    label="Speaker Diarization (identify speakers)",
+                    value=False,
+                    visible=PYANNOTE_AVAILABLE,
+                )
+
                 transcribe_btn = gr.Button(
                     "Transcribe",
                     variant="primary",
@@ -644,7 +712,7 @@ def create_app():
         # Connect button
         transcribe_btn.click(
             fn=transcribe,
-            inputs=[audio_input, engine, output_format, language, model, task],
+            inputs=[audio_input, engine, output_format, language, model, task, diarize_checkbox],
             outputs=[status, transcription, download, info],
         )
 
@@ -657,6 +725,8 @@ def create_app():
         if VOSK_AVAILABLE:
             engines_available.append("Vosk")
         footer = " | ".join(engines_available)
+        if PYANNOTE_AVAILABLE:
+            footer += " | Speaker Diarization"
         gr.Markdown(f"---\n*Available engines: {footer}*")
 
     return app

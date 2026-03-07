@@ -79,6 +79,7 @@ class TranscriptionResult:
     segments: Optional[List[Dict[str, Any]]] = None
     engine: Optional[str] = None
     model: Optional[str] = None
+    speakers: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -98,6 +99,9 @@ class TranscriptionResult:
             start = self._format_timestamp(segment.get('start', 0))
             end = self._format_timestamp(segment.get('end', 0))
             text = segment.get('text', '').strip()
+            speaker = segment.get('speaker')
+            if speaker:
+                text = f"{speaker}: {text}"
 
             srt_content.append(f"{i}")
             srt_content.append(f"{start} --> {end}")
@@ -116,6 +120,9 @@ class TranscriptionResult:
             start = self._format_timestamp(segment.get('start', 0), vtt=True)
             end = self._format_timestamp(segment.get('end', 0), vtt=True)
             text = segment.get('text', '').strip()
+            speaker = segment.get('speaker')
+            if speaker:
+                text = f"{speaker}: {text}"
 
             vtt_content.append(f"{start} --> {end}")
             vtt_content.append(text)
@@ -709,6 +716,7 @@ class Transcriber:
         audio_path: Union[str, Path],
         engine: Optional[str] = None,
         output_format: Optional[str] = None,
+        diarize: bool = False,
         **kwargs
     ) -> TranscriptionResult:
         """Transcribe a single audio file.
@@ -717,6 +725,7 @@ class Transcriber:
             audio_path: Path to audio file
             engine: Transcription engine to use (whisper, google, vosk)
             output_format: Output format (txt, json, srt, vtt)
+            diarize: Whether to run speaker diarization
             **kwargs: Additional arguments for transcription
 
         Returns:
@@ -751,6 +760,21 @@ class Transcriber:
             if engine in ['google', 'vosk'] and temp_path.exists():
                 temp_path.unlink()
 
+            # Run speaker diarization if requested
+            if diarize:
+                self.logger.info("Running speaker diarization...")
+                from diarize import SpeakerDiarizer, PYANNOTE_AVAILABLE
+                if not PYANNOTE_AVAILABLE:
+                    self.logger.error(
+                        "pyannote.audio not installed. "
+                        "Install with: pip install -r requirements-diarization.txt"
+                    )
+                else:
+                    diarizer = SpeakerDiarizer(
+                        config=self.config.get('diarization', {})
+                    )
+                    result = diarizer.process_result(result, audio_path)
+
             # Save output if format specified
             if output_format:
                 self._save_output(result, audio_path, output_format)
@@ -766,6 +790,7 @@ class Transcriber:
         file_paths: List[Union[str, Path]],
         engine: Optional[str] = None,
         output_format: Optional[str] = None,
+        diarize: bool = False,
         **kwargs
     ) -> List[TranscriptionResult]:
         """Transcribe multiple audio files.
@@ -774,6 +799,7 @@ class Transcriber:
             file_paths: List of paths to audio files
             engine: Transcription engine to use
             output_format: Output format
+            diarize: Whether to run speaker diarization
             **kwargs: Additional arguments for transcription
 
         Returns:
@@ -792,6 +818,7 @@ class Transcriber:
                     file_path,
                     engine=engine,
                     output_format=output_format,
+                    diarize=diarize,
                     **kwargs
                 )
                 results.append(result)
@@ -933,6 +960,12 @@ Examples:
     )
 
     parser.add_argument(
+        '--diarize',
+        action='store_true',
+        help='Enable speaker diarization (requires pyannote.audio and HF_TOKEN)'
+    )
+
+    parser.add_argument(
         '-v', '--verbose',
         action='store_true',
         help='Enable verbose output'
@@ -981,6 +1014,7 @@ Examples:
                 input_files[0],
                 engine=args.engine,
                 output_format=args.output_format or 'txt',
+                diarize=args.diarize,
                 language=args.language
             )
             print("\n" + "="*80)
@@ -998,6 +1032,7 @@ Examples:
                 input_files,
                 engine=args.engine,
                 output_format=args.output_format or 'txt',
+                diarize=args.diarize,
                 language=args.language
             )
             print(f"\nProcessed {len(results)} files successfully")

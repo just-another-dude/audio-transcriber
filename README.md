@@ -25,6 +25,7 @@ A comprehensive, production-ready audio transcription tool supporting multiple A
   - Subtitles (SRT, VTT)
 
 - **Advanced Features**
+  - Speaker diarization (identify and label speakers)
   - Batch processing for multiple files
   - Language auto-detection
   - Translation to English
@@ -88,6 +89,14 @@ OPENAI_API_KEY=your-api-key-here
 
 Get your API key from [platform.openai.com/api-keys](https://platform.openai.com/api-keys). The `.env` file is gitignored and will not be committed.
 
+For speaker diarization (optional), also add a HuggingFace token to `.env`:
+
+```bash
+HF_TOKEN=your-huggingface-token-here
+```
+
+You must accept the pyannote model terms at huggingface.co/pyannote/speaker-diarization-3.1 before using diarization.
+
 ### Install Audio Transcriber
 
 #### Option 1: Using pip (recommended)
@@ -113,6 +122,9 @@ pip install -r requirements.txt
 
 # For GPU support
 pip install -r requirements-gpu.txt
+
+# For speaker diarization (optional)
+pip install -r requirements-diarization.txt
 ```
 
 ### Verify Installation
@@ -219,6 +231,33 @@ python transcribe.py audio.m4a --engine google
 # Vosk (offline)
 python transcribe.py audio.m4a --engine vosk
 ```
+
+#### Speaker Diarization
+
+Identify and label different speakers in your transcriptions:
+
+```bash
+# Enable speaker diarization
+python transcribe.py meeting.m4a --diarize
+
+# Combine with subtitle output
+python transcribe.py meeting.m4a --diarize --output-format srt
+```
+
+Speaker diarization requires `pyannote.audio` and a HuggingFace token:
+```bash
+pip install -r requirements-diarization.txt
+# Set HF_TOKEN in .env
+```
+
+Output example (TXT — speaker label only on speaker change):
+```
+Speaker 1: Hello, how are you?
+Speaker 2: I'm fine, thanks.
+Speaker 1: Great, let's get started.
+```
+
+In the web interface, a "Speaker Diarization" checkbox appears when pyannote is installed.
 
 #### Advanced Options
 
@@ -660,7 +699,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [ ] Web API (REST/GraphQL)
 - [ ] Real-time streaming transcription
-- [ ] Speaker diarization (identify multiple speakers)
+- [x] Speaker diarization (identify multiple speakers)
 - [ ] Custom model fine-tuning
 - [ ] Cloud storage integration (S3, GCS)
 - [ ] More language support
